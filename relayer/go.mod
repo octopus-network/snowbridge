@@ -2,6 +2,8 @@ module github.com/snowfork/snowbridge/relayer
 
 go 1.18
 
+replace github.com/snowfork/go-substrate-rpc-client/v4 => /home/alistair/go-substrate-rpc-client
+
 require (
 	github.com/ethereum/go-ethereum v1.10.20
 	github.com/ferranbt/fastssz v0.1.0

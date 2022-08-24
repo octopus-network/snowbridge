@@ -56,14 +56,19 @@ func subBeefyJustifications(ctx context.Context, cmd *cobra.Command) error {
 
 	for {
 		select {
-		case commitment, ok := <-sub.Chan():
+		case versionFinalityProof, ok := <-sub.Chan():
+			if !versionFinalityProof.IsV1 {
+				log.Error("BEEFY commitment is not version 1.")
+				return nil
+			}
+
 			if !ok {
 				return nil
 			}
 
-			blockNumber := commitment.Commitment.BlockNumber
+			blockNumber := versionFinalityProof.AsV1.Commitment.BlockNumber
 
-			if len(commitment.Signatures) == 0 {
+			if len(versionFinalityProof.AsV1.Signatures) == 0 {
 				log.Info("BEEFY commitment has no signatures, skipping...")
 				continue
 			}
@@ -119,7 +124,7 @@ func subBeefyJustifications(ctx context.Context, cmd *cobra.Command) error {
 
 			fmt.Printf("Commitment { BlockNumber: %v, ValidatorSetID: %v}\n",
 				blockNumber,
-				commitment.Commitment.ValidatorSetID,
+				versionFinalityProof.AsV1.Commitment.ValidatorSetID,
 			)
 
 			fmt.Printf("Leaf { ParentNumber: %v, ParentHash: %v, NextValidatorSetID: %v}\n",
