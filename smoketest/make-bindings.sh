@@ -5,7 +5,7 @@ set -eu
 mkdir -p src/contracts
 
 # Generate Rust bindings for BridgeHub
-subxt_version=v0.27.1
+subxt_version=v0.30.0
 cargo_dir=".cargo"
 export PATH=$PATH:$cargo_dir/bin
 
@@ -17,6 +17,7 @@ command -v subxt || cargo install subxt-cli \
 
 
 # Fetch metadata from BridgeHub and generate client
+subxt version
 subxt codegen --url ws://localhost:11144 | rustfmt --edition 2021 --emit=stdout > src/parachains/bridgehub.rs
 subxt codegen --url ws://localhost:12144 | rustfmt --edition 2021 --emit=stdout > src/parachains/assethub.rs
 subxt codegen --url ws://localhost:9944  | rustfmt --edition 2021 --emit=stdout > src/parachains/relaychain.rs

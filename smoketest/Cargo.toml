@@ -11,7 +11,8 @@ tokio = { version = "1.28.2", features = ["rt-multi-thread", "macros", "time"] }
 codec = { package = "parity-scale-codec", version = "3.0.0", default-features = false, features = ["derive", "full", "bit-vec"] }
 hex = "0.4.3"
 hex-literal = "0.4.1"
-subxt = { git = "https://github.com/paritytech/subxt.git", tag = "v0.27.1" }
+subxt = { git = "https://github.com/paritytech/subxt.git", tag = "v0.30.0" }
+subxt-signer = { git = "https://github.com/paritytech/subxt.git", tag = "v0.30.0", features = ["subxt", "sr25519"] }
 ethers = { git = "https://github.com/gakonst/ethers-rs", default-features = false, features = ["abigen", "ws"] }
 
 [dev-dependencies]

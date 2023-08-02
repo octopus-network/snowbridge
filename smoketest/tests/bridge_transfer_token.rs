@@ -1,5 +1,6 @@
 use std::{sync::Arc, time::Duration};
-use subxt::tx::{TxPayload, SubmittableExtrinsic};
+use subxt_signer::sr25519::dev;
+use subxt::tx::TxPayload;
 use ethers::{
 	prelude::*,
 	providers::{Provider, Ws},
@@ -22,8 +23,7 @@ use snowbridge_smoketest::{
 		assethub::{self},
 	},
 };
-use sp_core::{sr25519::Pair, Pair as PairT};
-use subxt::{tx::PairSigner, OnlineClient, PolkadotConfig};
+use subxt::{OnlineClient, PolkadotConfig};
 
 const ASSET_HUB_WS_URL: &str = "ws://127.0.0.1:12144";
 const ETHEREUM_API: &str = "ws://localhost:8546";
@@ -48,9 +48,10 @@ async fn bridge_transfer_token() {
 	let assethub: OnlineClient<PolkadotConfig> =
 		OnlineClient::from_url(ASSET_HUB_WS_URL).await.unwrap();
 
-	let ferdie: Pair = Pair::from_string("//Ferdie", None).expect("cannot create ferdie keypair");
+	let ferdie = dev::ferdie();
 
-	let signer: PairSigner<PolkadotConfig, _> = PairSigner::new(ferdie);
+	//let signer: PairSigner<PolkadotConfig, _> = PairSigner::new(ferdie);
+	//let signer: &dyn Signer<PolkadotConfig> = ferdie.public_key().into();
 
 	let amount: u128 = 1_000_000_000;
 	let assets = VersionedMultiAssets::V3(MultiAssets(vec![MultiAsset {
@@ -75,13 +76,12 @@ async fn bridge_transfer_token() {
 	let bridge_transfer_api = assethub::api::bridge_transfer::calls::TransactionApi;
 	let bridge_transfer_call = bridge_transfer_api.transfer_asset_via_bridge(assets, destination);
 
-	let b = bridge_transfer_call.encode_call_data(&assethub.metadata()).expect("encode");
-	let s = SubmittableExtrinsic::from_bytes(assethub, b);
-	println!("{:?}", b);
+	println!("Encoded {:?}", bridge_transfer_call.encode_call_data(&assethub.metadata()));
 
+	assethub.tx().validate(&bridge_transfer_call).expect("validation failed");
 	let result = assethub
 		.tx()
-		.sign_and_submit_then_watch_default(&s, &signer)
+		.sign_and_submit_then_watch_default(&bridge_transfer_call, &ferdie)
 		.await
 		.expect("send through call.")
 		.wait_for_finalized_success()
