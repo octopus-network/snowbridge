@@ -3,17 +3,18 @@ package execution
 import (
 	"context"
 	"fmt"
+	geth "github.com/ethereum/go-ethereum"
+	"github.com/ethereum/go-ethereum/crypto"
 	"github.com/snowfork/snowbridge/relayer/relays/beacon/header/syncer/api"
 	"github.com/snowfork/snowbridge/relayer/relays/beacon/store"
 	"math/big"
-	"sort"
 	"time"
 
 	"github.com/ethereum/go-ethereum/accounts/abi/bind"
 	"github.com/ethereum/go-ethereum/common"
+	gethtypes "github.com/ethereum/go-ethereum/core/types"
 	"github.com/sirupsen/logrus"
 	log "github.com/sirupsen/logrus"
-	"github.com/snowfork/go-substrate-rpc-client/v4/types"
 	"github.com/snowfork/snowbridge/relayer/chain/ethereum"
 	"github.com/snowfork/snowbridge/relayer/chain/parachain"
 	"github.com/snowfork/snowbridge/relayer/contracts"
@@ -22,13 +23,32 @@ import (
 	"golang.org/x/sync/errgroup"
 )
 
+type LogOperatorRegistered struct {
+	Operator   common.Address
+	OperatorId [32]byte
+}
+
+type LogOperatorDeregistered struct {
+	Operator   common.Address
+	OperatorId [32]byte
+}
+
+type LogOperatorStakeUpdate struct {
+	OperatorId   [32]byte
+	QuorumNumber uint8
+	Stake        big.Int
+}
 type Relay struct {
-	config          *Config
-	keypair         *sr25519.Keypair
-	paraconn        *parachain.Connection
-	ethconn         *ethereum.Connection
-	gatewayContract *contracts.Gateway
-	beaconHeader    *header.Header
+	config              *Config
+	keypair             *sr25519.Keypair
+	paraconn            *parachain.Connection
+	ethconn             *ethereum.Connection
+	beaconHeader        *header.Header
+	stakeRegistry       common.Address
+	registryCoordinator common.Address
+	blockstore          Blockstore
+	defaultStartHeight  uint64
+	eventSigs           [][]common.Hash
 }
 
 func NewRelay(
@@ -56,31 +76,30 @@ func (r *Relay) Start(ctx context.Context, eg *errgroup.Group) error {
 		return err
 	}
 	r.ethconn = ethconn
-
 	writer := parachain.NewParachainWriter(
 		paraconn,
 		r.config.Sink.Parachain.MaxWatchedExtrinsics,
 		r.config.Sink.Parachain.MaxBatchCallSize,
 	)
 
+	bs, err := NewBlockstore("beacon_execution.block")
+	r.blockstore = *bs
+	r.eventSigs = [][]common.Hash{{
+		crypto.Keccak256Hash([]byte("")),
+		crypto.Keccak256Hash([]byte("")),
+		crypto.Keccak256Hash([]byte("")),
+	}}
+
+	if err != nil {
+		return err
+	}
+
 	err = writer.Start(ctx, eg)
 	if err != nil {
 		return err
 	}
-
-	headerCache, err := ethereum.NewHeaderBlockCache(
-		&ethereum.DefaultBlockLoader{Conn: ethconn},
-	)
-	if err != nil {
-		return err
-	}
-
-	address := common.HexToAddress(r.config.Source.Contracts.Gateway)
-	contract, err := contracts.NewGateway(address, ethconn.Client())
-	if err != nil {
-		return err
-	}
-	r.gatewayContract = contract
+	r.registryCoordinator = common.HexToAddress(r.config.Source.Contracts.Gateway)
+	r.stakeRegistry = common.HexToAddress(r.config.Source.Contracts.Gateway)
 
 	store := store.New(r.config.Source.Beacon.DataStore.Location, r.config.Source.Beacon.DataStore.MaxEntries)
 	store.Connect()
@@ -100,219 +119,138 @@ func (r *Relay) Start(ctx context.Context, eg *errgroup.Group) error {
 		case <-ctx.Done():
 			return nil
 		case <-time.After(6 * time.Second):
-			log.WithFields(log.Fields{
-				"channelId": r.config.Source.ChannelID,
-			}).Info("Polling Nonces")
-
-			paraNonce, err := r.fetchLatestParachainNonce()
-			if err != nil {
-				return err
-			}
-
-			ethNonce, err := r.fetchEthereumNonce(ctx)
-			if err != nil {
-				return err
-			}
-
-			log.WithFields(log.Fields{
-				"channelId": types.H256(r.config.Source.ChannelID).Hex(),
-				"paraNonce": paraNonce,
-				"ethNonce":  ethNonce,
-			}).Info("Polled Nonces")
-
-			if paraNonce == ethNonce {
-				continue
-			}
 
 			blockNumber, err := ethconn.Client().BlockNumber(ctx)
 			if err != nil {
 				return fmt.Errorf("get last block number: %w", err)
 			}
 
-			events, err := r.findEvents(ctx, blockNumber, paraNonce+1)
+			events, err := r.findEvents(ctx, blockNumber)
 			if err != nil {
 				return fmt.Errorf("find events: %w", err)
 			}
 
 			for _, ev := range events {
-				inboundMsg, err := r.makeInboundMessage(ctx, headerCache, ev)
-				if err != nil {
-					return fmt.Errorf("make outgoing message: %w", err)
-				}
-				logger := log.WithFields(log.Fields{
-					"paraNonce":   paraNonce,
-					"ethNonce":    ethNonce,
-					"msgNonce":    ev.Nonce,
-					"address":     ev.Raw.Address.Hex(),
-					"blockHash":   ev.Raw.BlockHash.Hex(),
-					"blockNumber": ev.Raw.BlockNumber,
-					"txHash":      ev.Raw.TxHash.Hex(),
-					"txIndex":     ev.Raw.TxIndex,
-					"channelID":   types.H256(ev.ChannelID).Hex(),
-				})
+				fmt.Printf("", ev)
+				/*	inboundMsg, err := r.makeInboundMessage(ctx, headerCache, ev)
+					if err != nil {
+						return fmt.Errorf("make outgoing message: %w", err)
+					}
+					logger := log.WithFields(log.Fields{
+						"paraNonce":   paraNonce,
+						"ethNonce":    ethNonce,
+						"msgNonce":    ev.Nonce,
+						"address":     ev.Raw.Address.Hex(),
+						"blockHash":   ev.Raw.BlockHash.Hex(),
+						"blockNumber": ev.Raw.BlockNumber,
+						"txHash":      ev.Raw.TxHash.Hex(),
+						"txIndex":     ev.Raw.TxIndex,
+						"channelID":   types.H256(ev.ChannelID).Hex(),
+					})
 
-				if ev.Nonce <= paraNonce {
-					logger.Warn("inbound message outdated, just skipped")
-					continue
-				}
-				nextBlockNumber := new(big.Int).SetUint64(ev.Raw.BlockNumber + 1)
+					if ev.Nonce <= paraNonce {
+						logger.Warn("inbound message outdated, just skipped")
+						continue
+					}
+					nextBlockNumber := new(big.Int).SetUint64(ev.Raw.BlockNumber + 1)
 
-				blockHeader, err := ethconn.Client().HeaderByNumber(ctx, nextBlockNumber)
-				if err != nil {
-					return fmt.Errorf("get block header: %w", err)
-				}
+					blockHeader, err := ethconn.Client().HeaderByNumber(ctx, nextBlockNumber)
+					if err != nil {
+						return fmt.Errorf("get block header: %w", err)
+					}
 
-				// ParentBeaconRoot in https://eips.ethereum.org/EIPS/eip-4788 from Deneb onward
-				executionProof, err := beaconHeader.FetchExecutionProof(*blockHeader.ParentBeaconRoot)
-				if err == header.ErrBeaconHeaderNotFinalized {
-					logger.Warn("beacon header not finalized, just skipped")
-					continue
-				}
-				if err != nil {
-					return fmt.Errorf("fetch execution header proof: %w", err)
-				}
-				inboundMsg.Proof.ExecutionProof = executionProof
+					// ParentBeaconRoot in https://eips.ethereum.org/EIPS/eip-4788 from Deneb onward
+					executionProof, err := beaconHeader.FetchExecutionProof(*blockHeader.ParentBeaconRoot)
+					if err == header.ErrBeaconHeaderNotFinalized {
+						logger.Warn("beacon header not finalized, just skipped")
+						continue
+					}
+					if err != nil {
+						return fmt.Errorf("fetch execution header proof: %w", err)
+					}
+					inboundMsg.Proof.ExecutionProof = executionProof
 
-				logger.WithFields(logrus.Fields{
-					"EventLog": inboundMsg.EventLog,
-					"Proof":    inboundMsg.Proof,
-				}).Debug("Generated message from Ethereum log")
+					logger.WithFields(logrus.Fields{
+						"EventLog": inboundMsg.EventLog,
+						"Proof":    inboundMsg.Proof,
+					}).Debug("Generated message from Ethereum log")
 
-				err = writer.WriteToParachainAndWatch(ctx, "EthereumInboundQueue.submit", inboundMsg)
-				if err != nil {
-					logger.Error("inbound message fail to sent")
-					return fmt.Errorf("write to parachain: %w", err)
-				}
-				paraNonce, _ = r.fetchLatestParachainNonce()
-				if paraNonce != ev.Nonce {
-					logger.Error("inbound message sent but fail to execute")
-					return fmt.Errorf("inbound message fail to execute")
-				}
-				logger.Info("inbound message executed successfully")
+					err = writer.WriteToParachainAndWatch(ctx, "EthereumInboundQueue.submit", inboundMsg)
+					if err != nil {
+						logger.Error("inbound message fail to sent")
+						return fmt.Errorf("write to parachain: %w", err)
+					}
+					paraNonce, _ = r.fetchLatestParachainNonce()
+					if paraNonce != ev.Nonce {
+						logger.Error("inbound message sent but fail to execute")
+						return fmt.Errorf("inbound message fail to execute")
+					}
+					logger.Info("inbound message executed successfully")*/
 			}
 		}
 	}
 }
 
-func (r *Relay) fetchLatestParachainNonce() (uint64, error) {
-	paraID := r.config.Source.ChannelID
-	encodedParaID, err := types.EncodeToBytes(r.config.Source.ChannelID)
-	if err != nil {
-		return 0, err
-	}
-
-	paraNonceKey, err := types.CreateStorageKey(r.paraconn.Metadata(), "EthereumInboundQueue", "Nonce", encodedParaID, nil)
-	if err != nil {
-		return 0, fmt.Errorf("create storage key for EthereumInboundQueue.Nonce(%v): %w",
-			paraID, err)
-	}
-	var paraNonce uint64
-	ok, err := r.paraconn.API().RPC.State.GetStorageLatest(paraNonceKey, &paraNonce)
-	if err != nil {
-		return 0, fmt.Errorf("fetch storage EthereumInboundQueue.Nonce(%v): %w",
-			paraID, err)
-	}
-	if !ok {
-		paraNonce = 0
-	}
-
-	return paraNonce, nil
-}
-
-func (r *Relay) fetchEthereumNonce(ctx context.Context) (uint64, error) {
-	opts := bind.CallOpts{
-		Context: ctx,
-	}
-	_, ethOutboundNonce, err := r.gatewayContract.ChannelNoncesOf(&opts, r.config.Source.ChannelID)
-	if err != nil {
-		return 0, fmt.Errorf("fetch Gateway.ChannelNoncesOf(%v): %w", r.config.Source.ChannelID, err)
-	}
-
-	return ethOutboundNonce, nil
-}
-
-const BlocksPerQuery = 4096
+const BlocksPerQuery = 512
 
 func (r *Relay) findEvents(
 	ctx context.Context,
 	latestFinalizedBlockNumber uint64,
-	start uint64,
-) ([]*contracts.GatewayOutboundMessageAccepted, error) {
 
-	channelID := r.config.Source.ChannelID
+) ([]gethtypes.Log, error) {
 
-	var allEvents []*contracts.GatewayOutboundMessageAccepted
-
+	var allEvents []gethtypes.Log
 	blockNumber := latestFinalizedBlockNumber
+
+	beginInt, err := r.blockstore.TryLoadLatestBlock()
+	if err != nil {
+		return nil, fmt.Errorf("filter events: %w", err)
+	}
+	begin := beginInt.Uint64()
+	if begin == 0 {
+		begin = r.defaultStartHeight
+	}
 
 	for {
 		log.Info("loop")
-
-		var begin uint64
-		if blockNumber < BlocksPerQuery {
-			begin = 0
-		} else {
-			begin = blockNumber - BlocksPerQuery
+		finish := false
+		end := begin + BlocksPerQuery
+		if end > blockNumber {
+			end = blockNumber
+			finish = true
 		}
-
 		opts := bind.FilterOpts{
 			Start:   begin,
-			End:     &blockNumber,
+			End:     &end,
 			Context: ctx,
 		}
-
-		done, events, err := r.findEventsWithFilter(&opts, channelID, start)
+		events, err := r.findEventsWithFilter(&opts)
 		if err != nil {
 			return nil, fmt.Errorf("filter events: %w", err)
 		}
-
 		if len(events) > 0 {
 			allEvents = append(allEvents, events...)
 		}
-
-		blockNumber = begin
-
-		if done || begin == 0 {
+		begin = end
+		if finish {
 			break
 		}
 	}
-
-	sort.SliceStable(allEvents, func(i, j int) bool {
-		return allEvents[i].Nonce < allEvents[j].Nonce
-	})
-
+	r.blockstore.StoreBlock(new(big.Int).SetUint64(blockNumber))
 	return allEvents, nil
 }
 
-func (r *Relay) findEventsWithFilter(opts *bind.FilterOpts, channelID [32]byte, start uint64) (bool, []*contracts.GatewayOutboundMessageAccepted, error) {
-	iter, err := r.gatewayContract.FilterOutboundMessageAccepted(opts, [][32]byte{channelID}, [][32]byte{})
-	if err != nil {
-		return false, nil, err
+func (r *Relay) findEventsWithFilter(opts *bind.FilterOpts) ([]gethtypes.Log, error) {
+	query := geth.FilterQuery{
+		FromBlock: big.NewInt(int64(opts.Start)),
+		ToBlock:   big.NewInt(int64(*opts.End)),
+		Addresses: []common.Address{
+			r.registryCoordinator,
+			r.stakeRegistry,
+		},
+		Topics: r.eventSigs,
 	}
-
-	var events []*contracts.GatewayOutboundMessageAccepted
-	done := false
-
-	for {
-		more := iter.Next()
-		if !more {
-			err = iter.Error()
-			if err != nil {
-				return false, nil, err
-			}
-			break
-		}
-		if iter.Event.Nonce >= start {
-			events = append(events, iter.Event)
-		}
-		if iter.Event.Nonce == start && opts.Start != 0 {
-			done = true
-			iter.Close()
-			break
-		}
-	}
-
-	return done, events, nil
+	return r.ethconn.Client().FilterLogs(opts.Context, query)
 }
 
 func (r *Relay) makeInboundMessage(

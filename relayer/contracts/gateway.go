@@ -1528,6 +1528,9 @@ type GatewayOutboundMessageAccepted struct {
 	Raw       types.Log // Blockchain specific contextual infos
 }
 
+
+
+
 // FilterOutboundMessageAccepted is a free log retrieval operation binding the contract event 0x7153f9357c8ea496bba60bf82e67143e27b64462b49041f8e689e1b05728f84f.
 //
 // Solidity: event OutboundMessageAccepted(bytes32 indexed channelID, uint64 nonce, bytes32 indexed messageID, bytes payload)
