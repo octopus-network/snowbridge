@@ -15,9 +15,11 @@ import (
 )
 
 type EventLog struct {
-	Address types.H160
-	Topics  []types.H256
-	Data    types.Bytes
+	Address     types.H160
+	Topics      []types.H256
+	Data        types.Bytes
+	BlockNumber uint64
+	LogIndex    uint32
 }
 
 type Message struct {
